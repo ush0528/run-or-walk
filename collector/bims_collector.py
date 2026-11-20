@@ -20,7 +20,7 @@ KEYS = {
 
 # 키마다 상세기능별 하루 호출 한도 (마이페이지에서 확인한 값으로 고치기)
 DAILY_LIMIT = {
-    "A": {"stopArrByBstopid": 10000, "busInfoByRouteId": 10000},
+    "A": {"stopArrByBstopid": 100000, "busInfoByRouteId": 100000},
     "B": {"stopArrByBstopid": 10000, "busInfoByRouteId": 10000},
 }
 
