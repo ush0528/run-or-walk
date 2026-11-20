@@ -1,0 +1,11 @@
+# 인증키와 수집 데이터는 올리지 않음
+keys.local.json
+*.local.json
+.env
+BIMS/
+data/
+*.jsonl
+*.jsonl.gz
+__pycache__/
+*.pyc
+.DS_Store
