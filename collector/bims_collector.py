@@ -231,13 +231,29 @@ def run():
                 for lid in sorted(routes):
                     rec = guarded_call(POSITION_KEY, "busInfoByRouteId", counts, lineid=lid)
                     if rec is not None:
-                        append("busPos", rec)
+                        append("busPos", slim_position(rec))
                 if int(time.time()) // 3600 != last_hour_log[0]:
                     last_hour_log[0] = int(time.time()) // 3600
                     log(f"노선 {len(routes)}개, 버스 위치 간격 약 {piv:.0f}초")
         counts["last_cycle"] = now().isoformat(timespec="seconds")
         save_counts(counts)
         time.sleep(max(1.0, 15 - (time.time() - cycle)))
+
+
+def slim_position(rec):
+    """노선 위치 응답에는 버스가 없는 정류장 줄까지 모두 들어 있어 용량이 큼.
+    차량번호(carno)가 있는 줄, 즉 버스가 있는 위치만 남김. 형식을 못 알아보면 원본 유지."""
+    body = rec["body"]
+    items = re.findall(r"<item>.*?</item>", body, re.S)
+    if not items:
+        return rec
+    keep = [it for it in items if re.search(r"<carno>\s*[^<\s]+\s*</carno>", it)]
+    if not keep and "<carno>" not in body:
+        return rec
+    rec = dict(rec)
+    rec["body"] = "".join(keep)
+    rec["n_items"] = len(items)
+    return rec
 
 
 def find(name):
