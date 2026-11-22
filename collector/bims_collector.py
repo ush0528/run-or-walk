@@ -52,6 +52,12 @@ if os.path.exists(_kf):
     with open(_kf, encoding="utf-8") as _f:
         KEYS.update({k: v for k, v in json.load(_f).items() if v})
 
+# 정류소 목록: 같은 폴더의 stops.json이 있으면 그것을 씀 {"이름": ["bstopid", "키"]}
+_sf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stops.json")
+if os.path.exists(_sf):
+    with open(_sf, encoding="utf-8") as _f:
+        STOPS = {k: tuple(v) for k, v in json.load(_f).items() if not k.startswith("_")}
+
 HOURS_SEC = (END_HOUR - START_HOUR) * 3600
 
 
