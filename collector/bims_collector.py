@@ -8,8 +8,9 @@
   python bims_collector.py plan               # 한도에 맞는 조회 간격 계산만 해 보기
   python bims_collector.py run                # 수집 시작 (06~23시에만 호출, 그 외에는 대기)
   python bims_collector.py status             # 오늘 호출 수, 마지막 성공 시각, 파일 크기
+  python bims_collector.py backup             # 지난 날짜 폴더를 지금 바로 Google Drive에 백업
 """
-import sys, os, time, json, gzip, re, math, urllib.request, urllib.parse, datetime
+import sys, os, time, json, gzip, re, math, shutil, subprocess, urllib.request, urllib.parse, datetime
 
 # ==================== 설정 (여기만 고치면 됨) ====================
 # 인증키: keys.local.json 파일에 {"A": "내 키", "B": "팀원 키"} 형식으로 적기 (저장소에 올리지 않음)
@@ -44,6 +45,8 @@ POSITION_KEY = "A"               # 버스 위치에 쓸 키
 SAFETY_MARGIN = 100              # 한도에서 이만큼 남기고 멈춤
 BASE = "http://apis.data.go.kr/6260000/BusanBIMS"
 OUT_DIR = os.path.expanduser("~/storage/shared/BIMS")   # 내장 저장공간/BIMS
+# 자동 백업: rclone에 Google Drive를 "gdrive"라는 이름으로 등록해 두면 매일 지난 날짜 폴더를 올림 (없으면 건너뜀)
+BACKUP_REMOTE = "gdrive:뛸까말까_BIMS"
 # ================================================================
 
 # 인증키는 저장소에 올리지 않는다: 같은 폴더의 keys.local.json 또는 환경변수에서 읽음
@@ -140,6 +143,29 @@ def compress_old_days():
                 log(f"압축 완료 {d}/{fn}.gz")
 
 
+def backup_old_days(force=False):
+    """지난 날짜 폴더 중 아직 백업하지 않은 것을 rclone으로 Google Drive에 복사"""
+    if not BACKUP_REMOTE or not shutil.which("rclone") or not os.path.isdir(OUT_DIR):
+        return
+    today = now().strftime("%Y-%m-%d")
+    for d in sorted(os.listdir(OUT_DIR)):
+        p = os.path.join(OUT_DIR, d)
+        if d >= today or not os.path.isdir(p):
+            continue
+        if os.path.exists(os.path.join(p, "_backup_ok")) and not force:
+            continue
+        try:
+            r = subprocess.run(["rclone", "copy", p, f"{BACKUP_REMOTE}/{d}", "--exclude", "_backup_ok"],
+                               capture_output=True, text=True, timeout=1800)
+        except Exception as e:
+            log(f"백업 실패 {d}: {e!r}"); continue
+        if r.returncode == 0:
+            open(os.path.join(p, "_backup_ok"), "w").write(now().isoformat(timespec="seconds"))
+            log(f"백업 완료 {d} → {BACKUP_REMOTE}/{d}")
+        else:
+            log(f"백업 실패 {d}: {r.stderr.strip()[-300:]}")
+
+
 def guarded_call(key_name, op, counts, **params):
     ck = f"{key_name}:{op}"
     if counts.get(ck, 0) >= DAILY_LIMIT[key_name][op] - SAFETY_MARGIN:
@@ -197,6 +223,7 @@ def run():
         n = now()
         if compressed_for != n.date():
             compress_old_days()
+            backup_old_days()
             compressed_for = n.date()
         if not (START_HOUR <= n.hour < END_HOUR):
             time.sleep(30)
@@ -302,6 +329,9 @@ if __name__ == "__main__":
     elif cmd == "plan":
         for l in plan_interval()[1]:
             print(l)
+    elif cmd == "backup":
+        compress_old_days()
+        backup_old_days(force="--force" in sys.argv)
     elif cmd == "status":
         status()
     else:
