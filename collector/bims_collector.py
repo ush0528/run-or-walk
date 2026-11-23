@@ -10,7 +10,7 @@
   python bims_collector.py status             # 오늘 호출 수, 마지막 성공 시각, 파일 크기
   python bims_collector.py backup             # 지난 날짜 폴더를 지금 바로 Google Drive에 백업
 """
-import sys, os, time, json, gzip, re, math, shutil, subprocess, urllib.request, urllib.parse, datetime
+import sys, os, time, concurrent.futures, json, gzip, re, math, shutil, subprocess, urllib.request, urllib.parse, datetime
 
 # ==================== 설정 (여기만 고치면 됨) ====================
 # 인증키: keys.local.json 파일에 {"A": "내 키", "B": "팀원 키"} 형식으로 적기 (저장소에 올리지 않음)
@@ -182,6 +182,36 @@ def guarded_call(key_name, op, counts, **params):
             "status": status, "body": body}
 
 
+POOL = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+
+
+def parallel_calls(key_name, op, counts, param_list):
+    """여러 호출을 동시에 보냄 (차례로 보내면 한 바퀴가 길어져 간격이 늘어나기 때문).
+    호출 수 집계는 보내기 전에 여기서 한 번에 처리."""
+    ck = f"{key_name}:{op}"
+    room = DAILY_LIMIT[key_name][op] - SAFETY_MARGIN - counts.get(ck, 0)
+    param_list = param_list[:max(0, room)]
+    counts[ck] = counts.get(ck, 0) + len(param_list)
+
+    def one(params):
+        t0 = now()
+        try:
+            status, body = call(key_name, op, **params)
+        except Exception as e:
+            return params, {"t": t0.isoformat(timespec="seconds"), "key": key_name, "op": op,
+                            "params": params, "err": repr(e)}, False
+        return params, {"t": t0.isoformat(timespec="seconds"), "op": op, "params": params,
+                        "status": status, "body": body}, True
+
+    results = []
+    for params, rec, ok in POOL.map(one, param_list):
+        if ok:
+            results.append((params, rec))
+        else:
+            append("_errors", rec)
+    return results
+
+
 def check_config():
     ok = True
     if not STOPS:
@@ -244,21 +274,19 @@ def run():
             if time.time() - next_stop.get(k, 0) < iv - 0.5:
                 continue
             next_stop[k] = time.time()
-            for name, sid in mine:
-                rec = guarded_call(k, "stopArrByBstopid", counts, bstopid=sid)
-                if rec is None:
-                    continue
-                rec["stop"] = name
+            names = {sid: nm for nm, sid in mine}
+            for params, rec in parallel_calls(k, "stopArrByBstopid", counts,
+                                              [{"bstopid": sid} for _, sid in mine]):
+                rec["stop"] = names[params["bstopid"]]
                 append("stopArr", rec)
                 routes.update(re.findall(r"<lineid>(\d+)</lineid>", rec["body"]))
         if COLLECT_POSITION and routes:
             piv = adaptive_interval(len(routes), POSITION_KEY, "busInfoByRouteId", counts, POSITION_MIN_INTERVAL)
             if piv is not None and time.time() - last_pos >= piv - 0.5:
                 last_pos = time.time()
-                for lid in sorted(routes):
-                    rec = guarded_call(POSITION_KEY, "busInfoByRouteId", counts, lineid=lid)
-                    if rec is not None:
-                        append("busPos", slim_position(rec))
+                for _, rec in parallel_calls(POSITION_KEY, "busInfoByRouteId", counts,
+                                             [{"lineid": lid} for lid in sorted(routes)]):
+                    append("busPos", slim_position(rec))
                 if int(time.time()) // 3600 != last_hour_log[0]:
                     last_hour_log[0] = int(time.time()) // 3600
                     log(f"노선 {len(routes)}개, 버스 위치 간격 약 {piv:.0f}초")
